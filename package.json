@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "@types/node": "^20.3.2",
+    "@typescript/vfs": "^1.4.0",
+    "tsx": "^3.12.7",
+    "typescript": "^5.1.6"
+  },
+  "prettier": {
+    "printWidth": 140,
+    "trailingComma": "all",
+    "arrowParens": "avoid"
+  }
+}
