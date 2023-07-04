@@ -8,6 +8,8 @@ import stripAnsi from "strip-ansi"
 // https://gist.github.com/orta/f80db73c6e8211211e3d224a5ab47624
 
 const code = `
+type B = { a: { b: string } }
+
 const a = { a: { b: 1 }, c :2, d: 3 }
 let b = { a: { b: "ok"} }
 
