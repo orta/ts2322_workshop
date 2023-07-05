@@ -18,8 +18,8 @@ import { TypeNode } from "typescript"
 // b = a
 // `
 
-const code = `var b1: { f(x: string): void };
-var b2: { f(x: number): void };
+const code = `var b1: { f(x: string, y: number): void, g: number };
+var b2: { f(x: number): void, g: number };
 b1 = b2;`
 
 const compilerOptions = {
@@ -82,10 +82,38 @@ function compile(): void {
       const sourceTypeNode = checker.typeToTypeNode(source, diagnostic.file, flags)
       const targetTypeNode = checker.typeToTypeNode(target, diagnostic.file, flags)
 
-      let highlightPath: string[] = []
+      // MAke the highlight  manually, as I'm not quite smart enough to do it from the sourceStack/targetStack
+
+      let highlightPath: HighlightComponent[] = []
       const maybePath = diagnostic.messageText.next && diagnostic.messageText.next[0] && diagnostic.messageText.next[0].messageText
       if (maybePath && maybePath.endsWith("are incompatible between these types.")) {
-        highlightPath = maybePath.split("'").slice(1, -1).join().split(".")
+        highlightPath = maybePath
+          .split("'")
+          .slice(1, -1)
+          .join()
+          .split(".")
+          .map(s => ({ type: "field", name: s }))
+      }
+
+      if (maybePath && maybePath.endsWith("are incompatible.")) {
+        highlightPath = maybePath
+          .split("'")
+          .slice(1, -1)
+          .join()
+          .split(".")
+          .map(s => ({ type: "field", name: s }))
+
+        const maybeParamsMessage = diagnostic?.messageText?.next?.[0]?.next?.[0]?.next?.[0]?.messageText
+        // console.log({ maybeParamsMessage })
+
+        if (
+          maybeParamsMessage &&
+          maybeParamsMessage.startsWith("Types of parameters") &&
+          maybeParamsMessage.endsWith("are incompatible.")
+        ) {
+          const [_, sourceParam, __, targetParam] = maybeParamsMessage.split("'")
+          highlightPath.push({ type: "param", name: sourceParam })
+        }
       }
 
       if (sourceTypeNode && targetTypeNode) {
@@ -93,9 +121,12 @@ function compile(): void {
         const rightPrint = printTypeNodeForPreview(targetTypeNode, diagnostic.file, 0, { typeStack: targetStack, highlightPath })
 
         const leftName = chalk.bold(variableDeclarationNameForType(source, "source"))
-        const leftTitle = `Type of '${leftName}'`
+        const leftSuffix = getFirstNameForType(source)
+        const leftTitle = `Type of '${leftName}'${leftSuffix ? ` (${leftSuffix})` : ""}`
+
         const leftTitleLength = stripAnsi(leftTitle).length
         const rightName = chalk.bold(variableDeclarationNameForType(target, "target"))
+        // const leftSuffix = getFirstNameForType(source)
         const rightTitle = `is not assignable to type of '${rightName}'`
 
         const longestLeft = leftPrint.reduce((a, b) => Math.max(a, stripAnsi(b).length), 0)
@@ -131,33 +162,58 @@ const singleLinePrinter = ts.createPrinter({ omitTrailingSemicolon: true })
 const line = "│"
 
 type PrintNodeConfig = {
-  highlightPath?: string[]
+  noPadding?: boolean
+  highlightPath?: HighlightComponent[]
   typeStack: ts.Type[]
+}
+
+// Type should list all the things we could possibly highlight
+type HighlightComponent = { type: "field" | "return" | "param"; name: string }
+
+function getFirstNameForType(type: ts.Type) {
+  // console.log({ s: type.getSymbol(), d: type.getSymbol()?.getDeclarations() })
+  const declarations = type.getSymbol()?.getDeclarations() ?? []
+
+  // debugger
+  return ts.getNameOfDeclaration(declarations[0]) ?? ""
 }
 
 function printTypeNodeForPreview(typeNode: ts.TypeNode, sourceFile: ts.SourceFile, depth = 0, config: PrintNodeConfig) {
   const lines: string[] = []
 
-  //   console.log(typeNode.__debugKind);
-  //   console.log(typeNode.__debugNodeFlags);
-  //   console.log(typeNode.__debugModifierFlags);
+  const highlightNode = config.highlightPath?.[depth]
 
   if (typeNode.kind === ts.SyntaxKind.TypeLiteral) {
     lines.push("{")
 
     typeNode.forEachChild(node => {
-      if (ts.isPropertySignature(node)) {
-        //   console.log(node.name);
-        //   const name = node.name.getText(sourceFile);
-        //   const type = node.type?.getText(sourceFile);
-        let type = printTypeNodeForPreview(node.type!, sourceFile, depth + 1, config).join("")
-        // console.log(node);
+      // debugger
+      if (ts.isMethodSignature(node) && node.type) {
+        const padding = "".padEnd((depth + 1) * 2)
 
-        // want 'a' to be highlighted
-        // debugger;
-        // let field = node.name.getText(sourceFile);
-        let field = node.name.escapedText.toString()
-        const isHighlighted = config.highlightPath?.[depth] && config.highlightPath?.[depth] === field
+        let name = node.name.escapedText.toString()
+        const isHighlighted = highlightNode && highlightNode.name === name && highlightNode.type === "field"
+        if (isHighlighted) name = chalk.bold(name)
+
+        const params = node.parameters
+          .map(p => {
+            let name = p.name.escapedText.toString()
+            const paramNode = config.highlightPath?.[depth + 1]
+            const paramIsHighlighted = highlightNode && paramNode?.name === name && paramNode?.type === "param"
+            const wrap = paramIsHighlighted ? chalk.bold : chalk.gray
+
+            const type = !p.type ? "any" : printTypeNodeForPreview(p.type, sourceFile, 0, config).join("")
+            return wrap(`${name}: ${type.trim()}`)
+          })
+          .join(", ")
+
+        const returnType = printTypeNodeForPreview(node.type, sourceFile, 0, config).join("")
+        lines.push(`${padding}${name}(${params}): ${returnType}`)
+      } else if (ts.isPropertySignature(node) && node.type) {
+        let type = printTypeNodeForPreview(node.type, sourceFile, depth + 1, config).join("")
+
+        let field: string = node.name.escapedText.toString()
+        const isHighlighted = highlightNode && highlightNode.name === field && highlightNode.type === "field"
         if (isHighlighted) {
           field = chalk.bold(field)
         }
@@ -168,8 +224,8 @@ function printTypeNodeForPreview(typeNode: ts.TypeNode, sourceFile: ts.SourceFil
         const padding = "".padEnd((depth + 1) * 2)
         lines.push(`${padding}${field}: ${type} `)
       } else {
-        //   const lines = singleLingPrinter(node, sourceFile);
         const type = printTypeNodeForPreview(node, sourceFile, depth + 1, config)
+
         lines.push("".padEnd(depth * 2) + type.join(""))
       }
     })
@@ -193,7 +249,7 @@ const variableDeclarationNameForType = (type: Type, side: "source" | "target") =
   const symbol = type.getSymbol()
   if (symbol) {
     const declarations = symbol.getDeclarations()
-    debugger
+    // debugger
     for (const declaration of declarations || []) {
       // debugger
       // if ("name" in declaration && "getText" in declaration.name) {
