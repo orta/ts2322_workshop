@@ -4,17 +4,23 @@ import * as tsVFS from "@typescript/vfs"
 import { formatCodeSpan } from "./printErrorLine"
 import chalk from "chalk"
 import stripAnsi from "strip-ansi"
+import { TypeNode } from "typescript"
 
 // https://gist.github.com/orta/f80db73c6e8211211e3d224a5ab47624
 
-const code = `
-type B = { a: { b: string } }
+// const code = `
+// type B = { a: { b: string } }
+// type C = { a: { c: string } }
 
-const a = { a: { b: 1 }, c :2, d: 3 }
-let b = { a: { b: "ok"} }
+// const a = { a: { b: 1 }, c :2, d: 3 }
+// let b:B | C = { a: { b: "ok"} }
 
-b = a
-`
+// b = a
+// `
+
+const code = `var b1: { f(x: string): void };
+var b2: { f(x: number): void };
+b1 = b2;`
 
 const compilerOptions = {
   Lib: [],
@@ -81,16 +87,15 @@ function compile(): void {
       if (maybePath && maybePath.endsWith("are incompatible between these types.")) {
         highlightPath = maybePath.split("'").slice(1, -1).join().split(".")
       }
-      debugger
 
       if (sourceTypeNode && targetTypeNode) {
         const leftPrint = printTypeNodeForPreview(sourceTypeNode, diagnostic.file, 0, { typeStack: sourceStack, highlightPath })
         const rightPrint = printTypeNodeForPreview(targetTypeNode, diagnostic.file, 0, { typeStack: targetStack, highlightPath })
 
-        const leftName = chalk.bold(variableDeclarationNameForType(source))
+        const leftName = chalk.bold(variableDeclarationNameForType(source, "source"))
         const leftTitle = `Type of '${leftName}'`
         const leftTitleLength = stripAnsi(leftTitle).length
-        const rightName = chalk.bold(variableDeclarationNameForType(target))
+        const rightName = chalk.bold(variableDeclarationNameForType(target, "target"))
         const rightTitle = `is not assignable to type of '${rightName}'`
 
         const longestLeft = leftPrint.reduce((a, b) => Math.max(a, stripAnsi(b).length), 0)
@@ -111,6 +116,9 @@ function compile(): void {
       let message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
       console.log(message)
     }
+
+    let message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+    console.log("\n" + chalk.gray(message))
   })
 
   let exitCode = emitResult.emitSkipped ? 1 : 0
@@ -157,11 +165,12 @@ function printTypeNodeForPreview(typeNode: ts.TypeNode, sourceFile: ts.SourceFil
         if (isHighlighted && config.highlightPath?.length === depth + 1) {
           type = chalk.bold.underline(type)
         }
-        lines.push(` ${field}: ${type} `)
+        const padding = "".padEnd((depth + 1) * 2)
+        lines.push(`${padding}${field}: ${type} `)
       } else {
         //   const lines = singleLingPrinter(node, sourceFile);
         const type = printTypeNodeForPreview(node, sourceFile, depth + 1, config)
-        lines.push(type.join(""))
+        lines.push("".padEnd(depth * 2) + type.join(""))
       }
     })
 
@@ -172,21 +181,34 @@ function printTypeNodeForPreview(typeNode: ts.TypeNode, sourceFile: ts.SourceFil
     lines.push("}")
   } else {
     const text = singleLinePrinter.printNode(ts.EmitHint.Unspecified, typeNode, sourceFile)
-    lines.push(text)
+    const padding = "".padEnd(depth * 2)
+
+    lines.push(padding + text)
   }
   return lines
 }
 
 // E.g we want to say "a is not assignable to type b" - this gets the a and b
-const variableDeclarationNameForType = (type: Type) => {
+const variableDeclarationNameForType = (type: Type, side: "source" | "target") => {
   const symbol = type.getSymbol()
   if (symbol) {
     const declarations = symbol.getDeclarations()
-    // debugger;
+    debugger
     for (const declaration of declarations || []) {
       // debugger
-      if ("name" in declaration && "getText" in declaration.name) {
-        return declaration.name.getText()
+      // if ("name" in declaration && "getText" in declaration.name) {
+      //   return declaration.name.getText()
+      // }
+
+      if (ts.isUnionTypeNode(declaration)) {
+        const types = declaration.types.map(t => t.getText())
+        return types.join(" | ")
+      }
+
+      if (ts.isTypeLiteralNode(declaration)) {
+        if (ts.isTypeAliasDeclaration(declaration.parent)) {
+          return declaration.parent.name.getText()
+        }
       }
       // if (ts.isTypeAliasDeclaration(declaration)) {
       //   return declaration.name.getText();
@@ -207,8 +229,18 @@ const variableDeclarationNameForType = (type: Type) => {
         return declaration.parent.name.getText()
       }
     }
+    return "[unknown]"
+  } else {
+    if (type.isUnion()) {
+      const types = type.types.map(t => variableDeclarationNameForType(t, side))
+      return types.join(" | ")
+    }
+
+    if (type.isIntersection()) {
+      const types = type.types.map(t => variableDeclarationNameForType(t, side))
+      return types.join(" & ")
+    }
   }
-  return "[unknown]"
 }
 
 compile()
